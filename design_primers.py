@@ -2,6 +2,7 @@ import argparse
 from pathlib import Path
 
 from modules.hmmsearch import hmmsearch 
+from modules.find_gene import get_protein
 
 
 def argparser():
@@ -27,7 +28,7 @@ def argparser():
     return parser
 
 def read_config(config_file):
-    pass
+    return
 
 def main():
     parser = argparser()
@@ -40,10 +41,11 @@ def main():
     else:
         genes = str(args.genes).split(",")
     
+    configs = read_config(args.config)
+
     print(genes)
     
-
-    print(args)
+    get_protein(args.genome, genes)
 
 
 if __name__ == "__main__":

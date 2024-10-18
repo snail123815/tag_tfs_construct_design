@@ -15,6 +15,7 @@ ID_QUALIFIERS = [
     "locus_tag",
     "gene",
     "protein_id",
+    "gene_synonym",
     "product",
 ]
 
@@ -39,7 +40,7 @@ def get_protein(genome, genes, codon_table=11):
             if feature.type in ["CDS", "gene"]:
                 id = None
                 for qualifier in ID_QUALIFIERS:
-                    qid = feature.qualifiers.get(qualifier, None)
+                    qid = feature.qualifiers.get(qualifier, [""])[0]
                     if qid in genes:
                         id = qid
                         break
@@ -55,8 +56,8 @@ def get_protein(genome, genes, codon_table=11):
                         "genes", []
                     ).append((gene, contig_i, feature.location))
                 else:
-                    faa = feature.qualifiers.get("translation", None)
-                    if faa is None:
+                    faa = feature.qualifiers.get("translation", [""])[0]
+                    if faa == "":
                         fna = contig.seq[
                             feature.location.start : feature.location.end
                         ]
@@ -76,7 +77,7 @@ def get_protein(genome, genes, codon_table=11):
                     )
                     target_sequences.setdefault(id, {}).setdefault(
                         "proteins", []
-                    ).append(protein, contig_i, feature.location)
+                    ).append((protein, contig_i, feature.location))
 
     # Check if all genes were found, if some are found multiple times, etc.
     for gene in genes:
