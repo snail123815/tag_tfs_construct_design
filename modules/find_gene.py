@@ -4,10 +4,6 @@ from Bio.Seq import Seq
 
 import logging
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-)
 logger = logging.getLogger(__name__)
 
 
@@ -127,4 +123,4 @@ def get_protein(genome, genes, codon_table=11):
                     )
                 )
 
-    return target_sequences
+    return contigs, target_sequences
