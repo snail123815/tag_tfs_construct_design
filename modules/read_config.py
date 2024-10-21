@@ -17,6 +17,6 @@ def read_config(config_file:Path) -> dict:
     logger.info(f"Read config file: {config_file}")
 
     assert "hmmsearch" in config, "hmmsearch path not found in config"
-    assert config["hmmsearch"].is_file(), "hmmsearch path not found"
+    assert Path(config["hmmsearch"]).is_file(), "hmmsearch path not found"
 
     return config

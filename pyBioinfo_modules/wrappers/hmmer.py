@@ -2,6 +2,7 @@ import gzip
 import lzma
 import re
 import subprocess
+import logging
 from concurrent.futures import ProcessPoolExecutor
 from collections import OrderedDict, namedtuple
 from pathlib import Path
@@ -9,7 +10,9 @@ from pathlib import Path
 from tqdm import tqdm
 import pandas as pd
 
-from wrappers.hmmer_config import (
+logger = logging.getLogger(__name__)
+
+from .hmmer_config import (
     NCPU,
     T_DOME,
     T_E,
@@ -18,7 +21,7 @@ from wrappers.hmmer_config import (
     GATHER_T_COV,
     GATHER_T_E,
     GATHER_T_DOME,
-    LEN_DIFF
+    LEN_DIFF,
 )
 
 from pyBioinfo_modules.wrappers._environment_settings import (
@@ -29,8 +32,26 @@ from pyBioinfo_modules.wrappers._environment_settings import (
 )
 
 
-def run_hmmsearch():
-    return
+def hmmsearch(
+    HMMSEARCH_CMD: Path | str,
+    protein_faa: Path | str,
+    hmm_file: Path | str,
+    output_file: Path | str,
+):
+    cmd = [
+        str(HMMSEARCH_CMD),
+        "--domtblout",
+        str(output_file),
+        str(hmm_file),
+        str(protein_faa),
+    ]
+    search_run = subprocess.run(cmd, capture_output=True)
+    try:
+        search_run.check_returncode()
+    except subprocess.CalledProcessError as e:
+        logger.error(f"Error running hmmsearch: {search_run.stderr.decode()}")
+        raise e
+    return search_run
 
 
 def run_jackhmmer_full_proteome(
@@ -99,7 +120,9 @@ def cal_cov(line: dict, dom_cov_regions: list[int]):
 def remove_duplicates(file_p: Path) -> Path:
     no_dup_path = file_p.parent / f"{file_p.stem}_nodup{file_p.suffix}"
     print(f"Removing duplicates from file {file_p} -> {no_dup_path}")
-    ddup = subprocess.run(f"awk '!seen[$0]++' {file_p} > {no_dup_path}", shell=True)
+    ddup = subprocess.run(
+        f"awk '!seen[$0]++' {file_p} > {no_dup_path}", shell=True
+    )
     ddup.check_returncode()
     return no_dup_path
 
