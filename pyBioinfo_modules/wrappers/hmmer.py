@@ -78,7 +78,7 @@ def run_jackhmmer_full_proteome(
         )
 
     if jackhmmer_run.returncode != 0:
-        print(jackhmmer_run.stderr.decode())
+        logger.error(jackhmmer_run.stderr.decode())
 
 
 def parse_domtblout():
@@ -119,7 +119,7 @@ def cal_cov(line: dict, dom_cov_regions: list[int]):
 
 def remove_duplicates(file_p: Path) -> Path:
     no_dup_path = file_p.parent / f"{file_p.stem}_nodup{file_p.suffix}"
-    print(f"Removing duplicates from file {file_p} -> {no_dup_path}")
+    logger.info(f"Removing duplicates from file {file_p} -> {no_dup_path}")
     ddup = subprocess.run(
         f"awk '!seen[$0]++' {file_p} > {no_dup_path}", shell=True
     )
@@ -127,12 +127,11 @@ def remove_duplicates(file_p: Path) -> Path:
     return no_dup_path
 
 
-def read_domtbl(domtbl_p: Path) -> pd.DataFrame:
+def read_domtbl(domtbl_p: Path, t_e=GATHER_T_E) -> pd.DataFrame:
     def parse_one_line(
         l,
         domtbl_dict,
-        t_e=GATHER_T_E,
-        len_diff=LEN_DIFF,
+        t_e=t_e,
         splitter=re.compile(r" +"),
     ):
         line_list = splitter.split(l.strip())
@@ -141,15 +140,11 @@ def read_domtbl(domtbl_p: Path) -> pd.DataFrame:
         if full_E > t_e:
             return
         else:
-            tlen = int(line_list[2])
-            qlen = int(line_list[5])
-            if abs(tlen - qlen) / min(tlen, qlen) > len_diff:
-                return
             try:
-                domtbl_dict["tp"].append(line_list[0])
-                domtbl_dict["qp"].append(line_list[3])
-                domtbl_dict["tlen"].append(tlen)
-                domtbl_dict["qlen"].append(qlen)
+                domtbl_dict["t"].append(line_list[0])
+                domtbl_dict["q"].append(line_list[3])
+                domtbl_dict["tlen"].append(int(line_list[2]))
+                domtbl_dict["qlen"].append(int(line_list[5]))
                 domtbl_dict["ali_from"].append(int(line_list[17]))
                 domtbl_dict["ali_to"].append(int(line_list[18]))
                 domtbl_dict["dom_i_E"].append(float(line_list[12]))
@@ -158,20 +153,20 @@ def read_domtbl(domtbl_p: Path) -> pd.DataFrame:
                 domtbl_dict["full_E"].append(full_E)
                 domtbl_dict["anno"].append(" ".join(line_list[22:]))
             except ValueError as ve:
-                print(l)
+                logger.error(l)
                 raise ve
 
-    print(f"Counting lines in domtblout from jackhmmer: {domtbl_p}")
+    logger.info(f"Counting lines in domtblout from jackhmmer: {domtbl_p}")
     domtbl_len = int(
         subprocess.run(["wc", "-l", domtbl_p], capture_output=True)
         .stdout.decode()
         .split(" ")[0]
     )
-    print(f"{domtbl_len} lines in total.")
+    logger.info(f"{domtbl_len} lines in total.")
     domtbl_dict = {}
     header = [
-        "tp",
-        "qp",
+        "t",
+        "q",
         "tlen",
         "qlen",
         "ali_from",
@@ -189,9 +184,9 @@ def read_domtbl(domtbl_p: Path) -> pd.DataFrame:
             if l.startswith("#"):
                 continue
             parse_one_line(l, domtbl_dict)
-    print("Converting data to dataframe...", end="")
+    logger.info("Converting data to dataframe...")
     domtbl_df = pd.DataFrame(domtbl_dict)
-    print("Done.")
+    logger.info("Done.")
     return domtbl_df
 
 

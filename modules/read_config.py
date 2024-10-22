@@ -18,5 +18,11 @@ def read_config(config_file:Path) -> dict:
 
     assert "hmmsearch" in config, "hmmsearch path not found in config"
     assert Path(config["hmmsearch"]).is_file(), "hmmsearch path not found"
+    assert "gather_threshold_e" in config, "gather_threshold_e not found in config"
+    assert "domain_coverage" in config, "domain_coverage not found in config"
+
+    config["hmmsearch"] = Path(config["hmmsearch"])
+    config["gather_threshold_e"] = float(config["gather_threshold_e"])
+    config["domain_coverage"] = float(config["domain_coverage"])
 
     return config
