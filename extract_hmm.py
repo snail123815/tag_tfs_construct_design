@@ -39,6 +39,11 @@ def argparser():
         help="DESC string of the HMM profile, separated by ','",
     )
     filter_method_args.add_argument(
+        "--filter_by_length",
+        type=str,
+        help="Length of the HMM profile, separated by ',', e.g. '100,200'",
+    )
+    filter_method_args.add_argument(
         "--combine_logic",
         type=str,
         choices=["OR", "AND"],
@@ -106,6 +111,8 @@ def extract_hmm_profiles_by(
                             is_target = True
                             break
                 case "LENG" | "NSEQ" | "EFFN":
+                    target_set = sorted(list(target_set))
+                    target = f"{by}_{target_set[0]}_{target_set[1]}"
                     assert (
                         len(target_set) == 2
                     ), f"A range (a, b) is required when filter by {by}"
@@ -209,6 +216,29 @@ def main():
                     f"Description {desc} found {len(extracted_desc[desc])} profiles."
                 )
 
+    # length
+    extracted_len = {}
+    if args.filter_by_length != "":
+        logging.info("Filter by lengths...")
+        lengths = set([int(a) for a in args.filter_by_length.split(",")])
+        extracted_len.update(
+            extract_hmm_profiles_by("LENG", lengths, pfam_file)
+        )
+        if len(extracted_len) == 0:
+            logging.error(
+                f"Length {args.filter_by_length} not found in the HMM file."
+            )
+        else:
+            for n in extracted_len:
+                profiles = extracted_len[n]
+                logging.info(f"{n} found {len(profiles)} profiles.")
+
+    all_extracted = [
+        extracted_acc,
+        extracted_name,
+        extracted_desc,
+        extracted_len,
+    ]
     # write to output file
     target_profiles = {}  # {acc: block}
     logging.info(
@@ -216,12 +246,12 @@ def main():
         "writing extracted profiles to output file..."
     )
     if args.combine_logic == "OR":
-        for extracted in [extracted_acc, extracted_name, extracted_desc]:
+        for extracted in all_extracted:
             for target, profiles in extracted.items():
                 target_profiles.update(profiles)
     else:
         accessions = set()
-        for extracted in [extracted_acc, extracted_name, extracted_desc]:
+        for extracted in all_extracted:
             if len(extracted) == 0:
                 continue  # skip empty extracted
             extracted_keys = set(
@@ -232,7 +262,7 @@ def main():
             else:
                 accessions &= extracted_keys
 
-        for extracted in [extracted_acc, extracted_name, extracted_desc]:
+        for extracted in all_extracted:
             if len(extracted) == 0:
                 continue  # skip empty extracted
             for acc in accessions:
