@@ -6,6 +6,7 @@ from pathlib import Path
 from tempfile import NamedTemporaryFile
 
 from Bio import SeqIO
+from Bio.Seq import Seq
 import pandas as pd
 
 from modules.find_gene import get_protein
@@ -83,9 +84,7 @@ def main():
     # Run hmmsearch
     args.output.mkdir(exist_ok=True)
     hmmtblout = args.output / f"{args.name}_{args.hmm.stem}.hmmtblout"
-    hmmsearch_run = hmmsearch(
-        configs["hmmsearch"], protein_faa.name, args.hmm, hmmtblout
-    )
+    hmmsearch(configs["hmmsearch"], protein_faa.name, args.hmm, hmmtblout)
 
     # Parse hmmtblout
     domtbl = read_domtbl(hmmtblout, t_e=configs["gather_threshold_e"])
@@ -111,7 +110,8 @@ def main():
             domtbl_dom = domtbl_gene[domtbl_gene["q"] == dom]
             dom_min_e = domtbl_dom["dom_i_E"].min()
             dom_e_transformed = -np.log10(domtbl_dom["dom_i_E"])
-            # Only include domains with E value higher than 10 magnitudes of the best hit
+            # Only include domains with E value higher than 10 magnitudes of
+            # the best hit
             domtbl_dom = domtbl_dom[
                 dom_e_transformed >= (dom_e_transformed.max() / 10)
             ]
@@ -146,6 +146,75 @@ def main():
         args.output / f"{args.name}_dom_near_term.tsv", sep="\t", index=True
     )
 
+    # Extract sequences from genome file, prepare for primer3
+    nterm_flag_linker = Seq("GTCCTTGTAGTCGCCGTCGTGGTCCTTGTAGTC")
+    primers_tag_cterm = {}
+    primers_tag_nterm = {}
+    for gene, term in target_dom_near_term.items():
+        gene_rec, contig_i, location = target_sequences[gene]["genes"][0]  #
+        base = contigs[contig_i]
+        if term == "N":
+            # use the last 20 nucleotides of the gene, reverse complement
+            p_rev_anneal = gene_rec.seq[-30:-3].reverse_complement()
+            # Check differences around the 20th nucleotide for repeats
+            found_diff = False
+            for i in list(range(7)):
+                if p_rev_anneal[-5 + i] != p_rev_anneal[-5 + i + 1]:
+                    found_diff = True
+                    p_rev_anneal = p_rev_anneal[: -5 + i + 1]
+                    break
+            if not found_diff:
+                p_rev_anneal = p_rev_anneal[:-5]
+
+            target_location_floc = (
+                location.start - 400
+                if location.strand == 1
+                else location.end + 400
+            )
+            p_fwd_anneal = (
+                base[target_location_floc : target_location_floc + 20]
+                if location.strand == 1
+                else base[
+                    target_location_floc - 20 : target_location_floc
+                ].reverse_complement()
+            )
+            primers_tag_cterm[gene] = {
+                "fwd_anneal": p_fwd_anneal,
+                "rev_anneal": p_rev_anneal,
+            }
+        else:
+            p_promoter_fwd_anneal = (
+                base[location.start - 400 : location.start - 380]
+                if location.strand == 1
+                else base[
+                    location.end + 380 : location.end + 400
+                ].reverse_complement()
+            )
+            p_promoter_rev_anneal = (
+                base[location.start - 20 : location.start].reverse_complement()
+                if location.strand == 1
+                else base[location.end : location.end + 20]
+            )
+            p_gene_fwd_anneal = (
+                base[location.start + 3 : location.start + 23]
+                if location.strand == 1
+                else base[
+                    location.end - 23 : location.end - 3
+                ].reverse_complement()
+            )
+            p_gene_rev_anneal = (
+                base[location.end - 20 : location.end].reverse_complement()
+                if location.strand == 1
+                else base[location.start : location.start + 20]
+            )
+
+            primers_tag_nterm[gene] = {
+                "promoter_fwd_anneal": p_promoter_fwd_anneal,
+                "promoter_rev_anneal": p_promoter_rev_anneal,
+                "gene_fwd_anneal": p_gene_fwd_anneal,
+                "gene_rev_anneal": p_gene_rev_anneal,
+            }
+            
     # primer3(data["genes"], args.output, configs)
 
 
