@@ -56,35 +56,43 @@ def argparser():
     return parser
 
 
-def avoid_repeats_3p_end(
+def find_local_best_primer_bind(
     primer_extended: Seq | SeqRecord,
     target_primer_size: int = 20,
     wander_range: tuple[int] = (-1, 6),
+    tm_range: tuple[float] = (58, 68),
+    panalty_offset: int = 1,
+    panalty_3p_repeat: int = 5,
+    panalty_tm_not_in_range: int = 10,
 ):
     # Check differences around the 20th nucleotide for repeats
     if isinstance(primer_extended, SeqRecord):
         primer_extended = primer_extended.seq
-    found_diff = False
     target_primer = primer_extended[:target_primer_size]
-    adjusted = False
     assert (
         len(primer_extended) >= target_primer_size + wander_range[1]
     ), "Provided sequence (primer_extended) must be enough for wander_range"
-    if target_primer[-2] != target_primer[-1]:
-        found_diff = True
-    else:
-        if wander_range[0] < 0:
-            assert wander_range[1] > 0, "Wander range must be positive"
-            rangeA = list(range(1, wander_range[1] + 1))
-            rangeB = list(range(wander_range[0], 0))
-        for i in rangeA + rangeB:
-            tp = primer_extended[: target_primer_size + i]
-            if tp[-2] != tp[-1]:
-                found_diff = True
-                target_primer = tp
-                adjusted = True
-                break
-    return target_primer, found_diff, adjusted
+
+    putatives = []
+    assert wander_range[0] > -6, "Wander must start after -6"
+    assert wander_range[1] <= 14, "Wander must end before 14"
+    wander_offsets = []
+    for offset in ([0, 1, 2, -1, 3, 4, -2, 5, 6, -3, 7, 8] +
+                   [-4, 9, 10, 11, -5, 12, 13, 14, -6]):
+        if offset in range(wander_range[0], wander_range[1]):
+            wander_offsets.append(offset)
+
+    for offset_panalty, offset in enumerate(wander_offsets):
+        score = -offset_panalty * panalty_offset
+        tp = primer_extended[: target_primer_size + offset]
+        if tp[-2] == tp[-1]:
+            score -= panalty_3p_repeat
+        if mt.Tm_NN(tp) < tm_range[0] or mt.Tm_NN(tp) > tm_range[1]:
+            score -= panalty_tm_not_in_range
+        putatives.append((tp, score))
+    target_primer, score = max(putatives, key=lambda x: x[1])
+
+    return target_primer, score
 
 
 def slice_seq_record_preserve_truncated(
@@ -357,7 +365,7 @@ def main():
         if tag_term == "C":  # HTH in N-terminal, tag C-terminal
             # use the last 20 nucleotides of the gene, reverse complement
             # Check differences around the 20th nucleotide for repeats
-            p_rev_anneal, _, _ = avoid_repeats_3p_end(
+            p_rev_anneal, _ = find_local_best_primer_bind(
                 gene_rec.seq[-30:-3].reverse_complement()
             )
             if location.strand == 1:
@@ -381,7 +389,7 @@ def main():
                         "molecule_type": base.annotations["molecule_type"]
                     },
                 )
-            p_fwd_anneal, _, _ = avoid_repeats_3p_end(
+            p_fwd_anneal, _ = find_local_best_primer_bind(
                 pext, p_optlength, wander_range
             )
             pf_name = f"pCt_{gene}_fwd"
@@ -435,18 +443,18 @@ def main():
                 promoter_end = location.start + 3
                 coding_start = location.start + 3
                 coding_end = location.end
-                p_promoter_fwd_anneal, _, _ = avoid_repeats_3p_end(
+                p_promoter_fwd_anneal, _ = find_local_best_primer_bind(
                     base[promoter_start : promoter_start + p_maxlength],
                 )
-                p_promoter_rev_anneal, _, _ = avoid_repeats_3p_end(
+                p_promoter_rev_anneal, _ = find_local_best_primer_bind(
                     base[
                         promoter_end - p_maxlength : promoter_end
                     ].reverse_complement(),
                 )
-                p_coding_fwd_anneal, _, _ = avoid_repeats_3p_end(
+                p_coding_fwd_anneal, _ = find_local_best_primer_bind(
                     base[coding_start : coding_start + p_maxlength],
                 )
-                p_coding_rev_anneal, _, _ = avoid_repeats_3p_end(
+                p_coding_rev_anneal, _ = find_local_best_primer_bind(
                     base[
                         coding_end - p_maxlength : coding_end
                     ].reverse_complement(),
@@ -466,20 +474,20 @@ def main():
                 promoter_end = location.end - 3
                 coding_start = location.end - 3
                 coding_end = location.start
-                p_promoter_fwd_anneal, _, _ = avoid_repeats_3p_end(
+                p_promoter_fwd_anneal, _ = find_local_best_primer_bind(
                     base[
                         promoter_start - p_maxlength : promoter_start
                     ].reverse_complement(),
                 )
-                p_promoter_rev_anneal, _, _ = avoid_repeats_3p_end(
+                p_promoter_rev_anneal, _ = find_local_best_primer_bind(
                     base[promoter_end : promoter_end + p_maxlength],
                 )
-                p_coding_fwd_anneal, _, _ = avoid_repeats_3p_end(
+                p_coding_fwd_anneal, _ = find_local_best_primer_bind(
                     base[
                         coding_start - p_maxlength : coding_start
                     ].reverse_complement(),
                 )
-                p_coding_rev_anneal, _, _ = avoid_repeats_3p_end(
+                p_coding_rev_anneal, _ = find_local_best_primer_bind(
                     base[coding_end : coding_end + p_maxlength],
                 )
                 nt_promoter_product_no_linker = (
