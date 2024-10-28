@@ -642,7 +642,7 @@ def main():
     primer_pairs_df["product"] = primer_pairs_df["product"].apply(
         lambda x: str(x.seq)
     )
-    primer_pairs_df.index.name = "construct"
+    primer_pairs_df.index.name = "fragment"
     primer_pairs_df.to_csv(
         args.output / f"{args.name}_pairs.tsv", sep="\t", index=True
     )
