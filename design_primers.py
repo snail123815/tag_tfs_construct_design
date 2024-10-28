@@ -108,7 +108,6 @@ def find_local_best_primer_bind(
 def slice_seq_record_preserve_truncated(
     seq_record: SeqRecord, slice_tuple: tuple[int, int]
 ) -> SeqRecord:
-    seq_record = deepcopy(seq_record)
     sliced_rec = seq_record[slice_tuple[0] : slice_tuple[1]]
     truncated_features_left = []
     truncated_features_right = []
@@ -155,7 +154,6 @@ def slice_seq_record_preserve_truncated(
 
 
 def clean_overhangs_for_gibson(seq_record: SeqRecord) -> SeqRecord:
-    seq_record = deepcopy(seq_record)
     first_feature = seq_record.features[0]
     last_feature = seq_record.features[-1]
     if "overhang" in first_feature.qualifiers["note"][0]:
@@ -172,7 +170,6 @@ def clean_overhangs_for_gibson(seq_record: SeqRecord) -> SeqRecord:
 
 
 def make_circular_gibson(seq_record: SeqRecord) -> SeqRecord:
-    seq_record = deepcopy(seq_record)
     for i in range(15, int(len(seq_record) / 2)):
         if seq_record.seq[-i:] == seq_record.seq[:i]:
             break
@@ -199,8 +196,6 @@ def make_circular_gibson(seq_record: SeqRecord) -> SeqRecord:
 def conjugate_seq_records_gibson(
     left_record: SeqRecord, right_record: SeqRecord
 ) -> SeqRecord:
-    left_record = deepcopy(left_record)
-    right_record = deepcopy(right_record)
     left_seq = left_record.seq
     right_seq = right_record.seq
     annotations = {
@@ -702,29 +697,28 @@ def main():
         construct.name = construct.id
         # Add primers to construct
         for f in construct.features:
-            if any([f.qualifiers[q][0].startswith('ori') for q in f.qualifiers]):
+            if any(
+                [f.qualifiers[q][0].startswith("ori") for q in f.qualifiers]
+            ):
                 if f.location.strand == -1:
                     zero_location = f.location.end
                     strand = -1
                 else:
                     zero_location = f.location.start
                     strand = 1
-        a = slice_seq_record_preserve_truncated(
-            construct, (0, zero_location)
-        )
+        a = slice_seq_record_preserve_truncated(construct, (0, zero_location))
         b = slice_seq_record_preserve_truncated(
             construct, (zero_location, len(construct))
         )
         construct_meta = {
-        "id" : construct.id,
-        "name" : construct.name,
-        "description" : construct.description,
-        "annotations" : construct.annotations
+            "id": construct.id,
+            "name": construct.name,
+            "description": construct.description,
+            "annotations": construct.annotations,
         }
         construct = b + a
         if strand == -1:
-            construct = construct.reverse_complement(
-            )
+            construct = construct.reverse_complement()
         construct.id = construct_meta["id"]
         construct.name = construct_meta["name"]
         construct.description = construct_meta["description"]
