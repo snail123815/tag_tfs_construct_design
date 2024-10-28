@@ -77,8 +77,17 @@ def find_local_best_primer_bind(
     assert wander_range[0] > -6, "Wander must start after -6"
     assert wander_range[1] <= 14, "Wander must end before 14"
     wander_offsets = []
-    for offset in ([0, 1, 2, -1, 3, 4, -2, 5, 6, -3, 7, 8] +
-                   [-4, 9, 10, 11, -5, 12, 13, 14, -6]):
+    for offset in [0, 1, 2, -1, 3, 4, -2, 5, 6, -3, 7, 8] + [
+        -4,
+        9,
+        10,
+        11,
+        -5,
+        12,
+        13,
+        14,
+        -6,
+    ]:
         if offset in range(wander_range[0], wander_range[1]):
             wander_offsets.append(offset)
 
@@ -439,7 +448,7 @@ def main():
             }
         elif tag_term == "N":  # HTH in C-terminal, tag N-terminal
             if location.strand == 1:
-                promoter_start = location.start - promoter_len
+                promoter_start = location.start + 3 - promoter_len
                 promoter_end = location.start + 3
                 coding_start = location.start + 3
                 coding_end = location.end
@@ -470,7 +479,7 @@ def main():
                     )
                 )
             else:
-                promoter_start = location.end + promoter_len
+                promoter_start = location.end - 3 + promoter_len
                 promoter_end = location.end - 3
                 coding_start = location.end - 3
                 coding_end = location.start
@@ -549,7 +558,7 @@ def main():
                 "rev": ppr_name,
                 "rev_TM": f"{mt.Tm_NN(p_promoter_rev_anneal):.2f}",
                 "product_size": (
-                    promoter_len
+                    abs(promoter_start-promoter_end)
                     + len(nterm_promoter_fwd_linker)
                     + len(nterm_promoter_rev_flag_linker)
                 ),
@@ -588,8 +597,7 @@ def main():
                 "rev": pcr_name,
                 "rev_TM": f"{mt.Tm_NN(p_coding_rev_anneal):.2f}",
                 "product_size": (
-                    abs(location.start - location.end)
-                    + 1
+                    abs(coding_start-coding_end)
                     + len(nterm_coding_fwd_flag_linker)
                     + len(nterm_coding_rev_linker)
                 ),
