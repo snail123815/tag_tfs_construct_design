@@ -1,4 +1,5 @@
 import argparse
+import re
 import logging
 from copy import deepcopy
 from datetime import datetime
@@ -248,6 +249,10 @@ def conjugate_seq_records_gibson(
     return merged_record
 
 
+def primer_name(prefix, suffix, n):
+    return f"{prefix}{n:03d}_{suffix}", n + 1
+
+
 def main():
     parser = argparser()
     args = parser.parse_args()
@@ -361,7 +366,11 @@ def main():
     wander_range = (-1, 6)
     p_maxlength = p_optlength + wander_range[1]
     promoter_len = 400
+    construct_n = configs["construct_id_start"]
+    primer_n = configs["oligo_id_start"]
     for gene, hth_term in target_dom_near_term.items():
+        construct_id_prefix = f"{configs["construct_prefix"]}{construct_n:03d}"
+        construct_n += 1
         gene_rec, contig_i, location = target_sequences[gene]["genes"][0]
         base = contigs[contig_i]
         if hth_term == "N":
@@ -401,8 +410,12 @@ def main():
             p_fwd_anneal, _ = find_local_best_primer_bind(
                 pext, p_optlength, wander_range
             )
-            pf_name = f"pCt_{gene}_fwd"
-            pr_name = f"pCt_{gene}_rev"
+            pf_name, primer_n = primer_name(
+                configs["oligo_prefix"], f"{gene}_Ct_fwd", primer_n
+            )
+            pr_name, primer_n = primer_name(
+                configs["oligo_prefix"], f"{gene}_Ct_rev", primer_n
+            )
             pf = cterm_fwd_linker + p_fwd_anneal
             pr = cterm_rev_flag_linker + p_rev_anneal
             ct_product = (
@@ -424,7 +437,7 @@ def main():
                 "full_len": len(pr),
                 "anneal_len": len(p_rev_anneal),
             }
-            primer_pairs[f"Ct_{gene}"] = {
+            primer_pairs[f"{construct_id_prefix}_{gene}_Ct"] = {
                 "fwd": pf_name,
                 "fwd_TM": f"{mt.Tm_NN(p_fwd_anneal):.2f}",
                 "rev": pr_name,
@@ -534,8 +547,12 @@ def main():
                 + nt_coding_product_no_linker
                 + nterm_coding_rev_linker.reverse_complement()
             )
-            ppf_name = f"pNt_{gene}_promoter_fwd"
-            ppr_name = f"pNt_{gene}_promoter_rev"
+            ppf_name, primer_n = primer_name(
+                configs["oligo_prefix"], f"{gene}_Nt_promoter_fwd", primer_n
+            )
+            ppr_name, primer_n = primer_name(
+                configs["oligo_prefix"], f"{gene}_Nt_promoter_rev", primer_n
+            )
             ppf = nterm_promoter_fwd_linker + p_promoter_fwd_anneal
             ppr = nterm_promoter_rev_flag_linker + p_promoter_rev_anneal
             primers[ppf_name] = {
@@ -552,13 +569,13 @@ def main():
                 "full_len": len(ppr),
                 "anneal_len": len(p_promoter_rev_anneal),
             }
-            primer_pairs[f"Nt_{gene}_promoter"] = {
+            primer_pairs[f"{construct_id_prefix}_{gene}_Nt_promoter"] = {
                 "fwd": ppf_name,
                 "fwd_TM": f"{mt.Tm_NN(p_promoter_fwd_anneal):.2f}",
                 "rev": ppr_name,
                 "rev_TM": f"{mt.Tm_NN(p_promoter_rev_anneal):.2f}",
                 "product_size": (
-                    abs(promoter_start-promoter_end)
+                    abs(promoter_start - promoter_end)
                     + len(nterm_promoter_fwd_linker)
                     + len(nterm_promoter_rev_flag_linker)
                 ),
@@ -573,8 +590,12 @@ def main():
                 "product": nt_promoter_product,
             }
 
-            pcf_name = f"pNt_{gene}_coding_fwd"
-            pcr_name = f"pNt_{gene}_coding_rev"
+            pcf_name, primer_n = primer_name(
+                configs["oligo_prefix"], f"{gene}_Nt_coding_fwd", primer_n
+            )
+            pcr_name, primer_n = primer_name(
+                configs["oligo_prefix"], f"{gene}_Nt_coding_rev", primer_n
+            )
             pcf = nterm_coding_fwd_flag_linker + p_coding_fwd_anneal
             pcr = nterm_coding_rev_linker + p_coding_rev_anneal
             primers[pcf_name] = {
@@ -591,13 +612,13 @@ def main():
                 "full_len": len(pcr),
                 "anneal_len": len(p_coding_rev_anneal),
             }
-            primer_pairs[f"Nt_{gene}_coding"] = {
+            primer_pairs[f"{construct_id_prefix}_{gene}_Nt_coding"] = {
                 "fwd": pcf_name,
                 "fwd_TM": f"{mt.Tm_NN(p_coding_fwd_anneal):.2f}",
                 "rev": pcr_name,
                 "rev_TM": f"{mt.Tm_NN(p_coding_rev_anneal):.2f}",
                 "product_size": (
-                    abs(coding_start-coding_end)
+                    abs(coding_start - coding_end)
                     + len(nterm_coding_fwd_flag_linker)
                     + len(nterm_coding_rev_linker)
                 ),
@@ -615,15 +636,14 @@ def main():
             logger.warning(f"Unknown terminal for {gene}")
 
     # Write primers to file
-    primers_cterm = pd.DataFrame(primers).T
-    primers_nterm = pd.DataFrame(primers).T
-    pd.concat([primers_cterm, primers_nterm], axis=1).to_csv(
+    pd.DataFrame(primers).T.to_csv(
         args.output / f"{args.name}_primers.tsv", sep="\t", index=True
     )
     primer_pairs_df = pd.DataFrame(primer_pairs).T
     primer_pairs_df["product"] = primer_pairs_df["product"].apply(
         lambda x: str(x.seq)
     )
+    primer_pairs_df.index.name = "construct"
     primer_pairs_df.to_csv(
         args.output / f"{args.name}_pairs.tsv", sep="\t", index=True
     )
@@ -638,7 +658,6 @@ def main():
     )
     # 2. find overlaps and remove from backbone them
     # 3. concatenate sequence, output as genbank
-    construct_n = configs["construct_id_start"]
     for gene, hth_term in target_dom_near_term.items():
         if hth_term == "N":
             tag_term = "C"
@@ -647,29 +666,94 @@ def main():
         else:
             logger.warning(f"Unknown terminal for {gene}")
             continue
-
-        construct_id_prefix = f"{configs["construct_prefix"]}{construct_n:03d}"
-        construct_n += 1
+        primers_per_gene = {}
+        for p in primers:
+            if gene in p:
+                primers_per_gene[p] = primers[p]
+        frags = {}
+        for pp in primer_pairs:
+            if gene in pp:
+                frags[pp] = primer_pairs[pp]["product"]
         if tag_term == "C":
-            frag = primer_pairs[f"Ct_{gene}"]["product"]
+            assert (
+                len(frags) == 1
+            ), "Multiple fragments found for C trem tagging"
+            construct_name = [p for p in frags][0]
+            frag = frags[construct_name]
             construct = make_circular_gibson(
                 conjugate_seq_records_gibson(frag, ct_backbone)
             )
-            construct.id = f"{construct_id_prefix}_{gene}_Ct"
-            construct.name = f"{construct_id_prefix}_{gene}_Ct"
+            construct.id = construct_name
         elif tag_term == "N":
-            frag_promoter = primer_pairs[f"Nt_{gene}_promoter"]["product"]
-            frag_coding = primer_pairs[f"Nt_{gene}_coding"]["product"]
+            assert len(frags) == 2, "Needs 2 fragments N trem tagging"
+            promoter_name = [p for p in frags if "_promoter" in p][0]
+            coding_name = [p for p in frags if "_coding" in p][0]
+            frag_promoter = frags[promoter_name]
+            frag_coding = frags[coding_name]
             construct = make_circular_gibson(
                 conjugate_seq_records_gibson(
                     conjugate_seq_records_gibson(frag_promoter, frag_coding),
                     nt_backbone,
                 )
             )
-            construct.id = f"{construct_id_prefix}_{gene}_Nt"
-            construct.name = f"{construct_id_prefix}_{gene}_Nt"
+            construct.id = re.sub(r"_promoter$", "", promoter_name)
         else:
             logger.warning(f"Unknown terminal for {gene}")
+        construct.name = construct.id
+        # Add primers to construct
+        for f in construct.features:
+            if any([f.qualifiers[q][0].startswith('ori') for q in f.qualifiers]):
+                if f.location.strand == -1:
+                    zero_location = f.location.end
+                    strand = -1
+                else:
+                    zero_location = f.location.start
+                    strand = 1
+        a = slice_seq_record_preserve_truncated(
+            construct, (0, zero_location)
+        )
+        b = slice_seq_record_preserve_truncated(
+            construct, (zero_location, len(construct))
+        )
+        construct_meta = {
+        "id" : construct.id,
+        "name" : construct.name,
+        "description" : construct.description,
+        "annotations" : construct.annotations
+        }
+        construct = b + a
+        if strand == -1:
+            construct = construct.reverse_complement(
+            )
+        construct.id = construct_meta["id"]
+        construct.name = construct_meta["name"]
+        construct.description = construct_meta["description"]
+        construct.annotations = construct_meta["annotations"]
+        for p in primers_per_gene:
+            # find location of primer in construct
+            pseq = primers_per_gene[p]["with_linker"]
+            strand = 1
+            ploc = construct.seq.find(pseq)
+            if ploc == -1:
+                ploc = construct.seq.find(pseq.reverse_complement())
+                strand = -1
+            if ploc == -1:
+                logger.warning(f"Primer {p} not found in construct")
+                continue
+            primer_feat = SeqFeature(
+                FeatureLocation(ploc, ploc + len(pseq), strand=strand),
+                type="primer_bind",
+                qualifiers={
+                    "label": [p],
+                    "primer": [pseq],
+                    "overhang": [primers[p]["linker"]],
+                    "anneal": [primers[p]["anneal"]],
+                },
+            )
+            construct.features.append(primer_feat)
+        construct.features = sorted(
+            construct.features, key=lambda x: x.location.start
+        )
         SeqIO.write(
             construct, f"data/output_test/{construct.id}.gbk", "genbank"
         )
