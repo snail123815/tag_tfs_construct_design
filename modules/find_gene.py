@@ -46,7 +46,9 @@ def get_protein(genome, genes, codon_table=11):
                     gene = SeqRecord(
                         get_dna(contig, feature.location),
                         id=id,
+                        name=id,
                         description="",
+                        annotations={"molecule_type": "DNA", "gene": id},
                     )
                     target_sequences.setdefault(id, {}).setdefault(
                         "genes", []
@@ -70,6 +72,7 @@ def get_protein(genome, genes, codon_table=11):
                         faa,
                         id=id,
                         description="",
+                        annotations={"molecule_type": "protein", "gene": id},
                     )
                     target_sequences.setdefault(id, {}).setdefault(
                         "proteins", []
@@ -102,6 +105,7 @@ def get_protein(genome, genes, codon_table=11):
                             get_dna(contigs[contig_i], location),
                             id=id,
                             description="",
+                            annotations={"molecule_type": "DNA", "gene": id},
                         ),
                         contig_i,
                         location,
@@ -117,6 +121,10 @@ def get_protein(genome, genes, codon_table=11):
                             ),
                             id=id,
                             description="",
+                            annotations={
+                                "molecule_type": "protein",
+                                "gene": id,
+                            },
                         ),
                         contig_i,
                         location,

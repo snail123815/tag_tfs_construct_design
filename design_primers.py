@@ -1,13 +1,20 @@
 import argparse
-import json
 import logging
-import numpy as np
+from copy import deepcopy
+from datetime import datetime
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 
+import numpy as np
+import pandas as pd
 from Bio import SeqIO
 from Bio.Seq import Seq
-import pandas as pd
+
+from Bio.SeqFeature import FeatureLocation, SeqFeature
+from Bio.SeqFeature import AfterPosition, BeforePosition
+from Bio.SeqFeature import ExactPosition
+from Bio.SeqRecord import SeqRecord
+from Bio.SeqUtils import MeltingTemp as mt
 
 from modules.find_gene import get_protein
 from modules.read_config import read_config
@@ -47,6 +54,181 @@ def argparser():
     )
 
     return parser
+
+
+def avoid_repeats_3p_end(
+    primer_extended: Seq | SeqRecord,
+    target_primer_size: int = 20,
+    wander_range: tuple[int] = (-1, 6),
+):
+    # Check differences around the 20th nucleotide for repeats
+    if isinstance(primer_extended, SeqRecord):
+        primer_extended = primer_extended.seq
+    found_diff = False
+    target_primer = primer_extended[:target_primer_size]
+    adjusted = False
+    assert (
+        len(primer_extended) >= target_primer_size + wander_range[1]
+    ), "Provided sequence (primer_extended) must be enough for wander_range"
+    if target_primer[-2] != target_primer[-1]:
+        found_diff = True
+    else:
+        if wander_range[0] < 0:
+            assert wander_range[1] > 0, "Wander range must be positive"
+            rangeA = list(range(1, wander_range[1] + 1))
+            rangeB = list(range(wander_range[0], 0))
+        for i in rangeA + rangeB:
+            tp = primer_extended[: target_primer_size + i]
+            if tp[-2] != tp[-1]:
+                found_diff = True
+                target_primer = tp
+                adjusted = True
+                break
+    return target_primer, found_diff, adjusted
+
+
+def slice_seq_record_preserve_truncated(
+    seq_record: SeqRecord, slice_tuple: tuple[int, int]
+) -> SeqRecord:
+    seq_record = deepcopy(seq_record)
+    sliced_rec = seq_record[slice_tuple[0] : slice_tuple[1]]
+    truncated_features_left = []
+    truncated_features_right = []
+    for feature in seq_record.features:
+        if feature.location.start < slice_tuple[0] < feature.location.end:
+            feat = deepcopy(feature)
+            feat.location = (
+                FeatureLocation(
+                    BeforePosition(slice_tuple[0]),
+                    (
+                        feat.location.end
+                        if feat.location.end <= slice_tuple[1]
+                        else AfterPosition(slice_tuple[1])
+                    ),
+                    feat.location.strand,
+                )
+                - slice_tuple[0]
+            )
+            feat.id = f"{feature.id}_truncated"
+            feat.qualifiers["truncated"] = ["left"]
+            truncated_features_left.append(feat)
+            continue
+        if feature.location.start < slice_tuple[1] < feature.location.end:
+            feat = deepcopy(feature)
+            feat.location = (
+                FeatureLocation(
+                    (
+                        feat.location.start
+                        if feat.location.start >= slice_tuple[0]
+                        else BeforePosition(slice_tuple[0])
+                    ),
+                    AfterPosition(slice_tuple[1]),
+                    feat.location.strand,
+                )
+                - slice_tuple[0]
+            )
+            feat.id = f"{feature.id}_truncated"
+            feat.qualifiers["truncated"] = ["right"]
+            truncated_features_right.append(feat)
+    sliced_rec.features = (
+        truncated_features_left + sliced_rec.features + truncated_features_right
+    )
+    return sliced_rec
+
+
+def clean_overhangs_for_gibson(seq_record: SeqRecord) -> SeqRecord:
+    seq_record = deepcopy(seq_record)
+    first_feature = seq_record.features[0]
+    last_feature = seq_record.features[-1]
+    if "overhang" in first_feature.qualifiers["note"][0]:
+        if first_feature.location.strand == 1:
+            seq_record = slice_seq_record_preserve_truncated(
+                seq_record, (len(first_feature), len(seq_record))
+            )
+    if "overhang" in last_feature.qualifiers["note"][0]:
+        if last_feature.location.strand == -1:
+            seq_record = slice_seq_record_preserve_truncated(
+                seq_record, (0, len(seq_record) - len(last_feature))
+            )
+    return seq_record
+
+
+def make_circular_gibson(seq_record: SeqRecord) -> SeqRecord:
+    seq_record = deepcopy(seq_record)
+    for i in range(15, int(len(seq_record) / 2)):
+        if seq_record.seq[-i:] == seq_record.seq[:i]:
+            break
+    seq_record = slice_seq_record_preserve_truncated(
+        seq_record, (i, len(seq_record))
+    )
+    linker_feature = SeqFeature(
+        FeatureLocation(
+            ExactPosition(len(seq_record) - i),
+            ExactPosition(len(seq_record)),
+            strand=None,
+        ),
+        type="misc_feature",
+        qualifiers={
+            "note": ["Gibson assembly linker"],
+            "standard_name": ["Ligation"],
+        },
+    )
+    seq_record.features.append(linker_feature)
+    seq_record.annotations["topology"] = "circular"
+    return seq_record
+
+
+def conjugate_seq_records_gibson(
+    left_record: SeqRecord, right_record: SeqRecord
+) -> SeqRecord:
+    left_record = deepcopy(left_record)
+    right_record = deepcopy(right_record)
+    left_seq = left_record.seq
+    right_seq = right_record.seq
+    annotations = {
+        "topology": "linear",
+        "molecule_type": "DNA",
+        "data_file_division": (
+            left_record.annotations["data_file_division"]
+            if ("data_file_division" in left_record.annotations)
+            and (len(left_record.annotations["data_file_division"]) > 0)
+            else (
+                right_record.annotations["data_file_division"]
+                if ("data_file_division" in right_record.annotations)
+                and (len(right_record.annotations["data_file_division"]) > 0)
+                else "UNK"
+            )
+        ),
+        "date": datetime.now().strftime("%d-%b-%Y").upper(),
+        "accessions": [f"{left_record.id}_{right_record.id}"],
+    }
+
+    for i in range(15, min(len(left_seq), len(right_seq))):
+        if left_seq[-i:] == right_seq[:i]:
+            break
+    if i > 45:
+        logger.warning(f"Overlapping region is too long: {i}")
+    truncated_right_record = slice_seq_record_preserve_truncated(
+        right_record, (i, len(right_seq))
+    )
+    linker_feature = SeqFeature(
+        FeatureLocation(
+            ExactPosition(len(left_seq) - i),
+            ExactPosition(len(left_seq)),
+            strand=None,
+        ),
+        type="misc_feature",
+        qualifiers={
+            "note": ["Gibson assembly linker"],
+            "standard_name": ["Ligation"],
+        },
+    )
+    left_record.features.append(linker_feature)
+    merged_record = left_record + truncated_right_record
+    merged_record.id = str(f"{left_record.id}_{right_record.id}")[:16]
+    merged_record.annotations = annotations
+
+    return merged_record
 
 
 def main():
@@ -147,75 +329,334 @@ def main():
     )
 
     # Extract sequences from genome file, prepare for primer3
-    nterm_flag_linker = Seq("GTCCTTGTAGTCGCCGTCGTGGTCCTTGTAGTC")
-    primers_tag_cterm = {}
-    primers_tag_nterm = {}
-    for gene, term in target_dom_near_term.items():
-        gene_rec, contig_i, location = target_sequences[gene]["genes"][0]  #
-        base = contigs[contig_i]
-        if term == "N":
-            # use the last 20 nucleotides of the gene, reverse complement
-            p_rev_anneal = gene_rec.seq[-30:-3].reverse_complement()
-            # Check differences around the 20th nucleotide for repeats
-            found_diff = False
-            for i in list(range(7)):
-                if p_rev_anneal[-5 + i] != p_rev_anneal[-5 + i + 1]:
-                    found_diff = True
-                    p_rev_anneal = p_rev_anneal[: -5 + i + 1]
-                    break
-            if not found_diff:
-                p_rev_anneal = p_rev_anneal[:-5]
+    cterm_fwd_linker = Seq("GCCAGTATACACTCCGCTAGCG")
+    cterm_rev_flag_linker = Seq("TGTCGTGGTCCTTGTAGTCGCCGTCGTGGTCCTTGTAGTC")
+    nterm_promoter_fwd_linker = Seq("GCCAGTATACACTCCGCTAGCG")
+    nterm_promoter_rev_flag_linker = Seq(
+        "TCGTCCTTGTAGTCGATGTCGTGGTCCTTGTAGTCGCCGTCGTGGTCCTTGTAGTC"
+    )
+    nterm_coding_fwd_flag_linker = Seq("ACCACGACATCGACTACAAGGACGACGACGACAAG")
+    nterm_coding_rev_linker = Seq("CAAAGGCCGCTTTTGCGGGATC")
 
-            target_location_floc = (
-                location.start - 400
-                if location.strand == 1
-                else location.end + 400
+    primers = {}
+    primer_pairs = {}
+    p_optlength = 20
+    wander_range = (-1, 6)
+    p_maxlength = p_optlength + wander_range[1]
+    promoter_len = 400
+    for gene, hth_term in target_dom_near_term.items():
+        gene_rec, contig_i, location = target_sequences[gene]["genes"][0]
+        base = contigs[contig_i]
+        if hth_term == "N":
+            tag_term = "C"
+        elif hth_term == "C":
+            tag_term = "N"
+        else:
+            logger.warning(f"Unknown terminal for {gene}")
+            continue
+        if tag_term == "C":  # HTH in N-terminal, tag C-terminal
+            # use the last 20 nucleotides of the gene, reverse complement
+            # Check differences around the 20th nucleotide for repeats
+            p_rev_anneal, _, _ = avoid_repeats_3p_end(
+                gene_rec.seq[-30:-3].reverse_complement()
             )
-            p_fwd_anneal = (
-                base[target_location_floc : target_location_floc + 20]
-                if location.strand == 1
-                else base[
-                    target_location_floc - 20 : target_location_floc
+            if location.strand == 1:
+                p_start = location.start - promoter_len
+                pext = base[p_start : p_start + p_maxlength]
+                ct_product = slice_seq_record_preserve_truncated(
+                    base, (p_start, location.end - 3)
+                )
+            else:
+                p_start = location.end + promoter_len
+                pext = base[
+                    p_start - p_maxlength : p_start
                 ].reverse_complement()
+                ct_product = slice_seq_record_preserve_truncated(
+                    base, (location.start + 3, p_start)
+                ).reverse_complement(
+                    id=f"{base.id}_rev_comp",
+                    name=f"{base.name}_rev_comp",
+                    description=base.description,
+                    annotations={
+                        "molecule_type": base.annotations["molecule_type"]
+                    },
+                )
+            p_fwd_anneal, _, _ = avoid_repeats_3p_end(
+                pext, p_optlength, wander_range
             )
-            primers_tag_cterm[gene] = {
+            pf_name = f"pCt_{gene}_fwd"
+            pr_name = f"pCt_{gene}_rev"
+            pf = cterm_fwd_linker + p_fwd_anneal
+            pr = cterm_rev_flag_linker + p_rev_anneal
+            ct_product = (
+                cterm_fwd_linker
+                + ct_product
+                + cterm_rev_flag_linker.reverse_complement()
+            )
+            primers[pf_name] = {
+                "anneal": p_fwd_anneal,
+                "linker": cterm_fwd_linker,
+                "with_linker": pf,
+                "full_len": len(pf),
+                "anneal_len": len(p_fwd_anneal),
+            }
+            primers[pr_name] = {
+                "anneal": p_rev_anneal,
+                "linker": cterm_rev_flag_linker,
+                "with_linker": pr,
+                "full_len": len(pr),
+                "anneal_len": len(p_rev_anneal),
+            }
+            primer_pairs[f"Ct_{gene}"] = {
+                "fwd": pf_name,
+                "fwd_TM": f"{mt.Tm_NN(p_fwd_anneal):.2f}",
+                "rev": pr_name,
+                "rev_TM": f"{mt.Tm_NN(p_rev_anneal):.2f}",
+                "product_size": (
+                    (location.end - location.start)
+                    - 3
+                    + promoter_len
+                    + len(cterm_fwd_linker)
+                    + len(cterm_rev_flag_linker)
+                ),
+                "fwd_seq": pf,
+                "fwd_full_len": len(pf),
+                "rev_seq": pr,
+                "rev_full_len": len(pr),
                 "fwd_anneal": p_fwd_anneal,
+                "fwd_anneal_len": len(p_fwd_anneal),
                 "rev_anneal": p_rev_anneal,
+                "rev_anneal_len": len(p_rev_anneal),
+                "product": ct_product,
+            }
+        elif tag_term == "N":  # HTH in C-terminal, tag N-terminal
+            if location.strand == 1:
+                promoter_start = location.start - promoter_len
+                promoter_end = location.start + 3
+                coding_start = location.start + 3
+                coding_end = location.end
+                p_promoter_fwd_anneal, _, _ = avoid_repeats_3p_end(
+                    base[promoter_start : promoter_start + p_maxlength],
+                )
+                p_promoter_rev_anneal, _, _ = avoid_repeats_3p_end(
+                    base[
+                        promoter_end - p_maxlength : promoter_end
+                    ].reverse_complement(),
+                )
+                p_coding_fwd_anneal, _, _ = avoid_repeats_3p_end(
+                    base[coding_start : coding_start + p_maxlength],
+                )
+                p_coding_rev_anneal, _, _ = avoid_repeats_3p_end(
+                    base[
+                        coding_end - p_maxlength : coding_end
+                    ].reverse_complement(),
+                )
+                nt_promoter_product_no_linker = (
+                    slice_seq_record_preserve_truncated(
+                        base, (promoter_start, promoter_end)
+                    )
+                )
+                nt_coding_product_no_linker = (
+                    slice_seq_record_preserve_truncated(
+                        base, (coding_start, coding_end)
+                    )
+                )
+            else:
+                promoter_start = location.end + promoter_len
+                promoter_end = location.end - 3
+                coding_start = location.end - 3
+                coding_end = location.start
+                p_promoter_fwd_anneal, _, _ = avoid_repeats_3p_end(
+                    base[
+                        promoter_start - p_maxlength : promoter_start
+                    ].reverse_complement(),
+                )
+                p_promoter_rev_anneal, _, _ = avoid_repeats_3p_end(
+                    base[promoter_end : promoter_end + p_maxlength],
+                )
+                p_coding_fwd_anneal, _, _ = avoid_repeats_3p_end(
+                    base[
+                        coding_start - p_maxlength : coding_start
+                    ].reverse_complement(),
+                )
+                p_coding_rev_anneal, _, _ = avoid_repeats_3p_end(
+                    base[coding_end : coding_end + p_maxlength],
+                )
+                nt_promoter_product_no_linker = (
+                    slice_seq_record_preserve_truncated(
+                        base, (promoter_end, promoter_start)
+                    ).reverse_complement(
+                        id=f"{base.id}_rev_comp",
+                        name=f"{base.name}_rev_comp",
+                        description=base.description,
+                        annotations={
+                            "molecule_type": base.annotations["molecule_type"]
+                        },
+                    )
+                )
+                nt_coding_product_no_linker = (
+                    slice_seq_record_preserve_truncated(
+                        base, (coding_end, coding_start)
+                    ).reverse_complement(
+                        id=f"{base.id}_rev_comp",
+                        name=f"{base.name}_rev_comp",
+                        description=base.description,
+                        annotations={
+                            "molecule_type": base.annotations["molecule_type"]
+                        },
+                    )
+                )
+
+            nt_promoter_product = (
+                nterm_promoter_fwd_linker
+                + nt_promoter_product_no_linker
+                + nterm_promoter_rev_flag_linker.reverse_complement()
+            )
+            nt_coding_product = (
+                nterm_coding_fwd_flag_linker
+                + nt_coding_product_no_linker
+                + nterm_coding_rev_linker.reverse_complement()
+            )
+            ppf_name = f"pNt_{gene}_promoter_fwd"
+            ppr_name = f"pNt_{gene}_promoter_rev"
+            ppf = nterm_promoter_fwd_linker + p_promoter_fwd_anneal
+            ppr = nterm_promoter_rev_flag_linker + p_promoter_rev_anneal
+            primers[ppf_name] = {
+                "anneal": p_promoter_fwd_anneal,
+                "linker": nterm_promoter_fwd_linker,
+                "with_linker": ppf,
+                "full_len": len(ppf),
+                "anneal_len": len(p_promoter_fwd_anneal),
+            }
+            primers[ppr_name] = {
+                "anneal": p_promoter_rev_anneal,
+                "linker": nterm_promoter_rev_flag_linker,
+                "with_linker": ppr,
+                "full_len": len(ppr),
+                "anneal_len": len(p_promoter_rev_anneal),
+            }
+            primer_pairs[f"Nt_{gene}_promoter"] = {
+                "fwd": ppf_name,
+                "fwd_TM": f"{mt.Tm_NN(p_promoter_fwd_anneal):.2f}",
+                "rev": ppr_name,
+                "rev_TM": f"{mt.Tm_NN(p_promoter_rev_anneal):.2f}",
+                "product_size": (
+                    promoter_len
+                    + len(nterm_promoter_fwd_linker)
+                    + len(nterm_promoter_rev_flag_linker)
+                ),
+                "fwd_seq": ppf,
+                "fwd_full_len": len(ppf),
+                "rev_seq": ppr,
+                "rev_full_len": len(ppr),
+                "fwd_anneal": p_promoter_fwd_anneal,
+                "fwd_anneal_len": len(p_promoter_fwd_anneal),
+                "rev_anneal": p_promoter_rev_anneal,
+                "rev_anneal_len": len(p_promoter_rev_anneal),
+                "product": nt_promoter_product,
+            }
+
+            pcf_name = f"pNt_{gene}_coding_fwd"
+            pcr_name = f"pNt_{gene}_coding_rev"
+            pcf = nterm_coding_fwd_flag_linker + p_coding_fwd_anneal
+            pcr = nterm_coding_rev_linker + p_coding_rev_anneal
+            primers[pcf_name] = {
+                "anneal": p_coding_fwd_anneal,
+                "linker": nterm_coding_fwd_flag_linker,
+                "with_linker": pcf,
+                "full_len": len(pcf),
+                "anneal_len": len(p_coding_fwd_anneal),
+            }
+            primers[pcr_name] = {
+                "anneal": p_coding_rev_anneal,
+                "linker": nterm_coding_rev_linker,
+                "with_linker": pcr,
+                "full_len": len(pcr),
+                "anneal_len": len(p_coding_rev_anneal),
+            }
+            primer_pairs[f"Nt_{gene}_coding"] = {
+                "fwd": pcf_name,
+                "fwd_TM": f"{mt.Tm_NN(p_coding_fwd_anneal):.2f}",
+                "rev": pcr_name,
+                "rev_TM": f"{mt.Tm_NN(p_coding_rev_anneal):.2f}",
+                "product_size": (
+                    abs(location.start - location.end)
+                    + 1
+                    + len(nterm_coding_fwd_flag_linker)
+                    + len(nterm_coding_rev_linker)
+                ),
+                "fwd_seq": pcf,
+                "fwd_full_len": len(pcf),
+                "rev_seq": pcr,
+                "rev_full_len": len(pcr),
+                "fwd_anneal": p_coding_fwd_anneal,
+                "fwd_anneal_len": len(p_coding_fwd_anneal),
+                "rev_anneal": p_coding_rev_anneal,
+                "rev_anneal_len": len(p_coding_rev_anneal),
+                "product": nt_coding_product,
             }
         else:
-            p_promoter_fwd_anneal = (
-                base[location.start - 400 : location.start - 380]
-                if location.strand == 1
-                else base[
-                    location.end + 380 : location.end + 400
-                ].reverse_complement()
-            )
-            p_promoter_rev_anneal = (
-                base[location.start - 20 : location.start].reverse_complement()
-                if location.strand == 1
-                else base[location.end : location.end + 20]
-            )
-            p_gene_fwd_anneal = (
-                base[location.start + 3 : location.start + 23]
-                if location.strand == 1
-                else base[
-                    location.end - 23 : location.end - 3
-                ].reverse_complement()
-            )
-            p_gene_rev_anneal = (
-                base[location.end - 20 : location.end].reverse_complement()
-                if location.strand == 1
-                else base[location.start : location.start + 20]
-            )
+            logger.warning(f"Unknown terminal for {gene}")
 
-            primers_tag_nterm[gene] = {
-                "promoter_fwd_anneal": p_promoter_fwd_anneal,
-                "promoter_rev_anneal": p_promoter_rev_anneal,
-                "gene_fwd_anneal": p_gene_fwd_anneal,
-                "gene_rev_anneal": p_gene_rev_anneal,
-            }
-            
-    # primer3(data["genes"], args.output, configs)
+    # Write primers to file
+    primers_cterm = pd.DataFrame(primers).T
+    primers_nterm = pd.DataFrame(primers).T
+    pd.concat([primers_cterm, primers_nterm], axis=1).to_csv(
+        args.output / f"{args.name}_primers.tsv", sep="\t", index=True
+    )
+    primer_pairs_df = pd.DataFrame(primer_pairs).T
+    primer_pairs_df["product"] = primer_pairs_df["product"].apply(
+        lambda x: str(x.seq)
+    )
+    primer_pairs_df.to_csv(
+        args.output / f"{args.name}_pairs.tsv", sep="\t", index=True
+    )
+
+    # Make constructs
+    # 1. remove BsaI overhangs
+    ct_backbone = clean_overhangs_for_gibson(
+        SeqIO.read(configs["backbone_cterm"], "genbank")
+    )
+    nt_backbone = clean_overhangs_for_gibson(
+        SeqIO.read(configs["backbone_nterm"], "genbank")
+    )
+    # 2. find overlaps and remove from backbone them
+    # 3. concatenate sequence, output as genbank
+    construct_n = configs["construct_id_start"]
+    for gene, hth_term in target_dom_near_term.items():
+        if hth_term == "N":
+            tag_term = "C"
+        elif hth_term == "C":
+            tag_term = "N"
+        else:
+            logger.warning(f"Unknown terminal for {gene}")
+            continue
+
+        construct_id_prefix = f"{configs["construct_prefix"]}{construct_n:03d}"
+        construct_n += 1
+        if tag_term == "C":
+            frag = primer_pairs[f"Ct_{gene}"]["product"]
+            construct = make_circular_gibson(
+                conjugate_seq_records_gibson(frag, ct_backbone)
+            )
+            construct.id = f"{construct_id_prefix}_{gene}_Ct"
+            construct.name = f"{construct_id_prefix}_{gene}_Ct"
+        elif tag_term == "N":
+            frag_promoter = primer_pairs[f"Nt_{gene}_promoter"]["product"]
+            frag_coding = primer_pairs[f"Nt_{gene}_coding"]["product"]
+            construct = make_circular_gibson(
+                conjugate_seq_records_gibson(
+                    conjugate_seq_records_gibson(frag_promoter, frag_coding),
+                    nt_backbone,
+                )
+            )
+            construct.id = f"{construct_id_prefix}_{gene}_Nt"
+            construct.name = f"{construct_id_prefix}_{gene}_Nt"
+        else:
+            logger.warning(f"Unknown terminal for {gene}")
+        SeqIO.write(
+            construct, f"data/output_test/{construct.id}.gbk", "genbank"
+        )
 
 
 if __name__ == "__main__":
