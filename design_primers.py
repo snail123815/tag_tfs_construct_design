@@ -290,11 +290,14 @@ def main():
 
     # Sort by E value and find the best hit
     entries = []
+    found_dom_near_term = {}
     target_dom_near_term = {}
+    default_term = "N"
     for gene in genes:
         domtbl_gene = domtbl[domtbl["t"] == gene]
         if len(domtbl_gene) == 0:
             logger.warning(f"No hit found for {gene}")
+            target_dom_near_term[gene] = default_term
             continue
         domtbl_gene_doms = []
         # Make "HTH" domain the priority
@@ -331,6 +334,7 @@ def main():
         )
         domain_at_term = "N" if ndist <= cdist else "C"
         logging.info(f"Domain at terminal: {domain_at_term}")
+        found_dom_near_term[gene] = domain_at_term
         target_dom_near_term[gene] = domain_at_term
 
         entries.append(domtbl_gene_best_dom[1])
@@ -341,7 +345,7 @@ def main():
         sep="\t",
         index=False,
     )
-    pd.DataFrame(target_dom_near_term, index=["Terminal"]).T.to_csv(
+    pd.DataFrame(found_dom_near_term, index=["Terminal"]).T.to_csv(
         args.output / f"{args.name}_dom_near_term.tsv", sep="\t", index=True
     )
 
@@ -749,7 +753,7 @@ def main():
             construct.features, key=lambda x: x.location.start
         )
         SeqIO.write(
-            construct, f"data/output_test/{construct.id}.gbk", "genbank"
+            construct, f"{args.output/construct.id}.gbk", "genbank"
         )
 
 
