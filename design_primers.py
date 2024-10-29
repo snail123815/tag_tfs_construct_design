@@ -1,8 +1,6 @@
 import argparse
 import re
 import logging
-from copy import deepcopy
-from datetime import datetime
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 
@@ -12,14 +10,20 @@ from Bio import SeqIO
 from Bio.Seq import Seq
 
 from Bio.SeqFeature import FeatureLocation, SeqFeature
-from Bio.SeqFeature import AfterPosition, BeforePosition
-from Bio.SeqFeature import ExactPosition
-from Bio.SeqRecord import SeqRecord
 from Bio.SeqUtils import MeltingTemp as mt
 
 from modules.find_gene import get_protein
 from modules.read_config import read_config
 from pyBioinfo_modules.wrappers.hmmer import hmmsearch, read_domtbl
+from modules.primer_utils import find_local_best_primer_bind
+from pyBioinfo_modules.bio_sequences.bio_features import (
+    slice_seq_record_preserve_truncated,
+)
+from modules.gibson import (
+    clean_overhangs_for_gibson,
+    make_circular_gibson,
+    conjugate_seq_records_gibson,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -56,192 +60,6 @@ def argparser():
 
     return parser
 
-
-def find_local_best_primer_bind(
-    primer_extended: Seq | SeqRecord,
-    target_primer_size: int = 20,
-    wander_range: tuple[int] = (-1, 6),
-    tm_range: tuple[float] = (58, 68),
-    panalty_offset: int = 1,
-    panalty_3p_repeat: int = 5,
-    panalty_tm_not_in_range: int = 10,
-):
-    # Check differences around the 20th nucleotide for repeats
-    if isinstance(primer_extended, SeqRecord):
-        primer_extended = primer_extended.seq
-    target_primer = primer_extended[:target_primer_size]
-    assert (
-        len(primer_extended) >= target_primer_size + wander_range[1]
-    ), "Provided sequence (primer_extended) must be enough for wander_range"
-
-    putatives = []
-    assert wander_range[0] > -6, "Wander must start after -6"
-    assert wander_range[1] <= 14, "Wander must end before 14"
-    wander_offsets = []
-    for offset in [0, 1, 2, -1, 3, 4, -2, 5, 6, -3, 7, 8] + [
-        -4,
-        9,
-        10,
-        11,
-        -5,
-        12,
-        13,
-        14,
-        -6,
-    ]:
-        if offset in range(wander_range[0], wander_range[1]):
-            wander_offsets.append(offset)
-
-    for offset_panalty, offset in enumerate(wander_offsets):
-        score = -offset_panalty * panalty_offset
-        tp = primer_extended[: target_primer_size + offset]
-        if tp[-2] == tp[-1]:
-            score -= panalty_3p_repeat
-        if mt.Tm_NN(tp) < tm_range[0] or mt.Tm_NN(tp) > tm_range[1]:
-            score -= panalty_tm_not_in_range
-        putatives.append((tp, score))
-    target_primer, score = max(putatives, key=lambda x: x[1])
-
-    return target_primer, score
-
-
-def slice_seq_record_preserve_truncated(
-    seq_record: SeqRecord, slice_tuple: tuple[int, int]
-) -> SeqRecord:
-    sliced_rec = seq_record[slice_tuple[0] : slice_tuple[1]]
-    truncated_features_left = []
-    truncated_features_right = []
-    for feature in seq_record.features:
-        if feature.location.start < slice_tuple[0] < feature.location.end:
-            feat = deepcopy(feature)
-            feat.location = (
-                FeatureLocation(
-                    BeforePosition(slice_tuple[0]),
-                    (
-                        feat.location.end
-                        if feat.location.end <= slice_tuple[1]
-                        else AfterPosition(slice_tuple[1])
-                    ),
-                    feat.location.strand,
-                )
-                - slice_tuple[0]
-            )
-            feat.id = f"{feature.id}_truncated"
-            feat.qualifiers["truncated"] = ["left"]
-            truncated_features_left.append(feat)
-            continue
-        if feature.location.start < slice_tuple[1] < feature.location.end:
-            feat = deepcopy(feature)
-            feat.location = (
-                FeatureLocation(
-                    (
-                        feat.location.start
-                        if feat.location.start >= slice_tuple[0]
-                        else BeforePosition(slice_tuple[0])
-                    ),
-                    AfterPosition(slice_tuple[1]),
-                    feat.location.strand,
-                )
-                - slice_tuple[0]
-            )
-            feat.id = f"{feature.id}_truncated"
-            feat.qualifiers["truncated"] = ["right"]
-            truncated_features_right.append(feat)
-    sliced_rec.features = (
-        truncated_features_left + sliced_rec.features + truncated_features_right
-    )
-    return sliced_rec
-
-
-def clean_overhangs_for_gibson(seq_record: SeqRecord) -> SeqRecord:
-    first_feature = seq_record.features[0]
-    last_feature = seq_record.features[-1]
-    if "overhang" in first_feature.qualifiers["note"][0]:
-        if first_feature.location.strand == 1:
-            seq_record = slice_seq_record_preserve_truncated(
-                seq_record, (len(first_feature), len(seq_record))
-            )
-    if "overhang" in last_feature.qualifiers["note"][0]:
-        if last_feature.location.strand == -1:
-            seq_record = slice_seq_record_preserve_truncated(
-                seq_record, (0, len(seq_record) - len(last_feature))
-            )
-    return seq_record
-
-
-def make_circular_gibson(seq_record: SeqRecord) -> SeqRecord:
-    for i in range(15, int(len(seq_record) / 2)):
-        if seq_record.seq[-i:] == seq_record.seq[:i]:
-            break
-    seq_record = slice_seq_record_preserve_truncated(
-        seq_record, (i, len(seq_record))
-    )
-    linker_feature = SeqFeature(
-        FeatureLocation(
-            ExactPosition(len(seq_record) - i),
-            ExactPosition(len(seq_record)),
-            strand=None,
-        ),
-        type="misc_feature",
-        qualifiers={
-            "note": ["Gibson assembly linker"],
-            "standard_name": ["Ligation"],
-        },
-    )
-    seq_record.features.append(linker_feature)
-    seq_record.annotations["topology"] = "circular"
-    return seq_record
-
-
-def conjugate_seq_records_gibson(
-    left_record: SeqRecord, right_record: SeqRecord
-) -> SeqRecord:
-    left_seq = left_record.seq
-    right_seq = right_record.seq
-    annotations = {
-        "topology": "linear",
-        "molecule_type": "DNA",
-        "data_file_division": (
-            left_record.annotations["data_file_division"]
-            if ("data_file_division" in left_record.annotations)
-            and (len(left_record.annotations["data_file_division"]) > 0)
-            else (
-                right_record.annotations["data_file_division"]
-                if ("data_file_division" in right_record.annotations)
-                and (len(right_record.annotations["data_file_division"]) > 0)
-                else "UNK"
-            )
-        ),
-        "date": datetime.now().strftime("%d-%b-%Y").upper(),
-        "accessions": [f"{left_record.id}_{right_record.id}"],
-    }
-
-    for i in range(15, min(len(left_seq), len(right_seq))):
-        if left_seq[-i:] == right_seq[:i]:
-            break
-    if i > 45:
-        logger.warning(f"Overlapping region is too long: {i}")
-    truncated_right_record = slice_seq_record_preserve_truncated(
-        right_record, (i, len(right_seq))
-    )
-    linker_feature = SeqFeature(
-        FeatureLocation(
-            ExactPosition(len(left_seq) - i),
-            ExactPosition(len(left_seq)),
-            strand=None,
-        ),
-        type="misc_feature",
-        qualifiers={
-            "note": ["Gibson assembly linker"],
-            "standard_name": ["Ligation"],
-        },
-    )
-    left_record.features.append(linker_feature)
-    merged_record = left_record + truncated_right_record
-    merged_record.id = str(f"{left_record.id}_{right_record.id}")[:16]
-    merged_record.annotations = annotations
-
-    return merged_record
 
 
 def primer_name(prefix, suffix, n):
@@ -752,9 +570,7 @@ def main():
         construct.features = sorted(
             construct.features, key=lambda x: x.location.start
         )
-        SeqIO.write(
-            construct, f"{args.output/construct.id}.gbk", "genbank"
-        )
+        SeqIO.write(construct, f"{args.output/construct.id}.gbk", "genbank")
 
 
 if __name__ == "__main__":

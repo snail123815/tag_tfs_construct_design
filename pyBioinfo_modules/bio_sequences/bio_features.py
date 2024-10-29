@@ -1,5 +1,57 @@
-from Bio.SeqFeature import SeqFeature, FeatureLocation
+from copy import deepcopy
 from math import ceil
+
+from Bio.SeqFeature import (AfterPosition, BeforePosition, FeatureLocation,
+                            SeqFeature)
+from Bio.SeqRecord import SeqRecord
+
+
+def slice_seq_record_preserve_truncated(
+    seq_record: SeqRecord, slice_tuple: tuple[int, int]
+) -> SeqRecord:
+    sliced_rec = seq_record[slice_tuple[0] : slice_tuple[1]]
+    truncated_features_left = []
+    truncated_features_right = []
+    for feature in seq_record.features:
+        if feature.location.start < slice_tuple[0] < feature.location.end:
+            feat = deepcopy(feature)
+            feat.location = (
+                FeatureLocation(
+                    BeforePosition(slice_tuple[0]),
+                    (
+                        feat.location.end
+                        if feat.location.end <= slice_tuple[1]
+                        else AfterPosition(slice_tuple[1])
+                    ),
+                    feat.location.strand,
+                )
+                - slice_tuple[0]
+            )
+            feat.id = f"{feature.id}_truncated"
+            feat.qualifiers["truncated"] = ["left"]
+            truncated_features_left.append(feat)
+            continue
+        if feature.location.start < slice_tuple[1] < feature.location.end:
+            feat = deepcopy(feature)
+            feat.location = (
+                FeatureLocation(
+                    (
+                        feat.location.start
+                        if feat.location.start >= slice_tuple[0]
+                        else BeforePosition(slice_tuple[0])
+                    ),
+                    AfterPosition(slice_tuple[1]),
+                    feat.location.strand,
+                )
+                - slice_tuple[0]
+            )
+            feat.id = f"{feature.id}_truncated"
+            feat.qualifiers["truncated"] = ["right"]
+            truncated_features_right.append(feat)
+    sliced_rec.features = (
+        truncated_features_left + sliced_rec.features + truncated_features_right
+    )
+    return sliced_rec
 
 
 def getSpanFetures(genome, startOri, endOri, expand=20000):
