@@ -167,15 +167,13 @@ def main():
         args.output / f"{args.name}_dom_near_term.tsv", sep="\t", index=True
     )
 
-    # Extract sequences from genome file, prepare for primer3
-    cterm_fwd_linker = Seq("GCCAGTATACACTCCGCTAGCG")
-    cterm_rev_flag_linker = Seq("TGTCGTGGTCCTTGTAGTCGCCGTCGTGGTCCTTGTAGTC")
-    nterm_promoter_fwd_linker = Seq("GCCAGTATACACTCCGCTAGCG")
-    nterm_promoter_rev_flag_linker = Seq(
-        "TCGTCCTTGTAGTCGATGTCGTGGTCCTTGTAGTCGCCGTCGTGGTCCTTGTAGTC"
-    )
-    nterm_coding_fwd_flag_linker = Seq("ACCACGACATCGACTACAAGGACGACGACGACAAG")
-    nterm_coding_rev_linker = Seq("CAAAGGCCGCTTTTGCGGGATC")
+    # Replace hardcoded linker sequences with sequences from the config
+    cterm_fwd_linker = Seq(configs["cterm_fwd_linker"])
+    cterm_rev_flag_linker = Seq(configs["cterm_rev_flag_linker"])
+    nterm_promoter_fwd_linker = Seq(configs["nterm_promoter_fwd_linker"])
+    nterm_promoter_rev_flag_linker = Seq(configs["nterm_promoter_rev_flag_linker"])
+    nterm_coding_fwd_flag_linker = Seq(configs["nterm_coding_fwd_flag_linker"])
+    nterm_coding_rev_linker = Seq(configs["nterm_coding_rev_linker"])
 
     primers = {}
     primer_pairs = {}
