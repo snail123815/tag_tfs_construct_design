@@ -19,7 +19,7 @@ from pyBioinfo_modules.wrappers.hmmer import hmmsearch, read_domtbl
 from modules.primer_utils import find_local_best_primer_bind
 from pyBioinfo_modules.bio_sequences.bio_features import (
     slice_seq_record_preserve_truncated,
-    add_oligo_to_seq_record_as_feature,
+    add_seq_to_SeqRecord_as_feature,
 )
 from modules.gibson import (
     clean_overhangs_for_gibson,
@@ -251,21 +251,17 @@ def main():
                 (pr_rc + configs["full_seqs_fixed"]["cterm_flag_full_seq"])
             )
             flag_product.id = f"{gene}_Ct_flag"
-            flag_product = add_oligo_to_seq_record_as_feature(
+            flag_product = add_seq_to_SeqRecord_as_feature(
                 flag_product,
-                SeqRecord(
-                    Seq(configs["full_seqs_fixed"]["PCB-323"]),
-                    id="PCB-323",
-                    description="PCB-323",
-                ),
+                Seq(configs["full_seqs_fixed"]["PCB-323"]),
+                feature_type="primer_bind",
+                qualifiers={"label":["PCB-323"]},
             )
-            flag_product = add_oligo_to_seq_record_as_feature(
+            flag_product = add_seq_to_SeqRecord_as_feature(
                 flag_product,
-                SeqRecord(
-                    Seq(configs["full_seqs_fixed"]["oCOMM117"]),
-                    id="oCOMM117",
-                    description="oCOMM117",
-                ),
+                Seq(configs["full_seqs_fixed"]["oCOMM117"]),
+                feature_type="primer_bind",
+                qualifiers={"label":["oCOMM117"]},
             )
             primers[pf_name] = {
                 "anneal": p_fwd_anneal,

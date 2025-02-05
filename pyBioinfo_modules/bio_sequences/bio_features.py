@@ -8,31 +8,57 @@ from Bio.SeqFeature import (
     SeqFeature,
 )
 from Bio.SeqRecord import SeqRecord
+from Bio.Seq import Seq
 
 
-def add_oligo_to_seq_record_as_feature(
-    seq_record: SeqRecord, oligo: SeqRecord
+def add_seq_to_SeqRecord_as_feature(
+    seq_record: SeqRecord,
+    target_seq: Seq,
+    feature_type: str = "feature",
+    qualifiers: dict = {},
 ) -> SeqRecord:
-    """Add oligo to the end of the sequence record. Automatically finds the
-    correct strand and location for the oligo."""
-    oligo_len = len(oligo)
-    seq_len = len(seq_record)
-    oligo_seq = oligo.seq
+    """
+    Add sequence to the end of the sequence record. Automatically finds the
+    correct strand and location for the target sequence.
+    If a primer bind sequence is provided, it will check if there is
+    5' overhang, and avoid that.
+    """
+
+    if (
+        feature_type == "primer_bind" and "overhang" in qualifiers
+    ):  # 5' overhang
+        try:
+            overhang = int(qualifiers["overhang"][0])
+            overhang = Seq("N" * overhang)
+        except ValueError:
+            overhang = Seq(qualifiers["overhang"][0])
+            assert (
+                overhang in target_seq
+            ), "Overhang not found in target sequence"
+        anneal_seq = target_seq[len(overhang) :]
+    else:
+        anneal_seq = target_seq
+
     seq_seq = seq_record.seq
+    seq_len = len(seq_record)
+    anneal_len = len(anneal_seq)
     on_strand = 1
-    if oligo_seq.reverse_complement() in seq_seq:
+    if anneal_seq.reverse_complement() in seq_seq:
         # located on -1 strand
         on_strand = -1
     else:
         raise ValueError("Oligo not found in sequence")
-    match_seq = oligo_seq if on_strand == 1 else oligo_seq.reverse_complement()
-    for i in range(seq_len - oligo_len+1):
-        if seq_seq[i : i + oligo_len] == match_seq:
-            location = FeatureLocation(i, i + oligo_len, strand=on_strand)
-            feature = SeqFeature(location=location, type="primer_bind")
-            feature.qualifiers["id"] = oligo.id
-            feature.qualifiers["name"] = oligo.name
-            feature.qualifiers["label"] = oligo.description
+    match_seq = (
+        anneal_seq if on_strand == 1 else anneal_seq.reverse_complement()
+    )
+    for i in range(seq_len - anneal_len + 1):
+        if seq_seq[i : i + anneal_len] == match_seq:
+            location = FeatureLocation(i, i + anneal_len, strand=on_strand)
+            feature = SeqFeature(
+                location=location,
+                type=feature_type,
+                qualifiers=qualifiers,
+            )
             seq_record.features.append(feature)
             return seq_record
     raise ValueError("Oligo not found in sequence")
