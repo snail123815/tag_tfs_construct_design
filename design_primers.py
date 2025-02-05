@@ -167,7 +167,6 @@ def main():
         args.output / f"{args.name}_dom_near_term.tsv", sep="\t", index=True
     )
 
-    # Replace hardcoded linker sequences with sequences from the config
     cterm_fwd_linker = Seq(configs["cterm_fwd_linker"])
     cterm_rev_flag_linker = Seq(configs["cterm_rev_flag_linker"])
     nterm_promoter_fwd_linker = Seq(configs["nterm_promoter_fwd_linker"])

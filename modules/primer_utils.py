@@ -8,9 +8,9 @@ def find_local_best_primer_bind(
     target_primer_size: int = 20,
     wander_range: tuple[int] = (-1, 6),
     tm_range: tuple[float] = (58, 68),
-    panalty_offset: int = 1,
-    panalty_3p_repeat: int = 5,
-    panalty_tm_not_in_range: int = 10,
+    penalty_offset: int = 1,
+    penalty_3p_repeat: int = 5,
+    penalty_tm_not_in_range: int = 10,
 ):
     # Check differences around the 20th nucleotide for repeats
     if isinstance(primer_extended, SeqRecord):
@@ -39,12 +39,12 @@ def find_local_best_primer_bind(
             wander_offsets.append(offset)
 
     for offset_panalty, offset in enumerate(wander_offsets):
-        score = -offset_panalty * panalty_offset
+        score = -offset_panalty * penalty_offset
         tp = primer_extended[: target_primer_size + offset]
         if tp[-2] == tp[-1]:
-            score -= panalty_3p_repeat
+            score -= penalty_3p_repeat
         if mt.Tm_NN(tp) < tm_range[0] or mt.Tm_NN(tp) > tm_range[1]:
-            score -= panalty_tm_not_in_range
+            score -= penalty_tm_not_in_range
         putatives.append((tp, score))
     target_primer, score = max(putatives, key=lambda x: x[1])
 
