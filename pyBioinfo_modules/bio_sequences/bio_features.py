@@ -1,9 +1,41 @@
 from copy import deepcopy
 from math import ceil
 
-from Bio.SeqFeature import (AfterPosition, BeforePosition, FeatureLocation,
-                            SeqFeature)
+from Bio.SeqFeature import (
+    AfterPosition,
+    BeforePosition,
+    FeatureLocation,
+    SeqFeature,
+)
 from Bio.SeqRecord import SeqRecord
+
+
+def add_oligo_to_seq_record_as_feature(
+    seq_record: SeqRecord, oligo: SeqRecord
+) -> SeqRecord:
+    """Add oligo to the end of the sequence record. Automatically finds the
+    correct strand and location for the oligo."""
+    oligo_len = len(oligo)
+    seq_len = len(seq_record)
+    oligo_seq = oligo.seq
+    seq_seq = seq_record.seq
+    on_strand = 1
+    if oligo_seq.reverse_complement() in seq_seq:
+        # located on -1 strand
+        on_strand = -1
+    else:
+        raise ValueError("Oligo not found in sequence")
+    match_seq = oligo_seq if on_strand == 1 else oligo_seq.reverse_complement()
+    for i in range(seq_len - oligo_len+1):
+        if seq_seq[i : i + oligo_len] == match_seq:
+            location = FeatureLocation(i, i + oligo_len, strand=on_strand)
+            feature = SeqFeature(location=location, type="primer_bind")
+            feature.qualifiers["id"] = oligo.id
+            feature.qualifiers["name"] = oligo.name
+            feature.qualifiers["label"] = oligo.description
+            seq_record.features.append(feature)
+            return seq_record
+    raise ValueError("Oligo not found in sequence")
 
 
 def slice_seq_record_preserve_truncated(
@@ -73,99 +105,132 @@ def getSpanFetures(genome, startOri, endOri, expand=20000):
 
         if spanStart and spanEnd:
             # Target position is inside feature
-            if feat.type == 'CDS':
+            if feat.type == "CDS":
                 # calculate correct start and end location to make it inframe
                 newStart = (3 - abs(start - feat.location.start)) % 3
                 newEnd = end - start - abs(end - feat.location.start) % 3
             else:
                 newStart = 0
                 newEnd = end - start
-            spanFeat.location = FeatureLocation(newStart,
-                                                newEnd,
-                                                strand=feat.location.strand)
+            spanFeat.location = FeatureLocation(
+                newStart, newEnd, strand=feat.location.strand
+            )
             for key in feat.qualifiers:
-                if key in ['gene_synonym', 'locus_tag', 'product',
-                           'protein_id', 'db_xref', 'mol_type']:
+                if key in [
+                    "gene_synonym",
+                    "locus_tag",
+                    "product",
+                    "protein_id",
+                    "db_xref",
+                    "mol_type",
+                ]:
                     spanFeat.qualifiers[key] = [
-                        f'{keyStr} (slice)' for keyStr in feat.qualifiers[key]]
-                elif key == 'translation':
+                        f"{keyStr} (slice)" for keyStr in feat.qualifiers[key]
+                    ]
+                elif key == "translation":
                     spanFeat.qualifiers[key] = list(feat.qualifiers[key])
                     if feat.location.strand == 1:
                         cutPointA = ceil((start - feat.location.start) / 3)
                         cutPointB = (end - feat.location.start) // 3
                     else:
                         len(spanFeat.qualifiers[key][0])
-                        cutPointA = len(
-                            spanFeat.qualifiers[key][0]) + 1 \
+                        cutPointA = (
+                            len(spanFeat.qualifiers[key][0])
+                            + 1
                             - (end - feat.location.start) // 3
-                        cutPointB = len(
-                            spanFeat.qualifiers[key][0]) + 1 \
+                        )
+                        cutPointB = (
+                            len(spanFeat.qualifiers[key][0])
+                            + 1
                             - ceil((start - feat.location.start) / 3)
-                    spanFeat.qualifiers[key][0] = \
-                        spanFeat.qualifiers[key][0][cutPointA:cutPointB]
+                        )
+                    spanFeat.qualifiers[key][0] = spanFeat.qualifiers[key][0][
+                        cutPointA:cutPointB
+                    ]
                 else:
                     spanFeat.qualifiers[key] = feat.qualifiers[key]
             spanFeats.append(spanFeat)
 
         elif spanStart:
             # Start position inside feature, feature ends in this range
-            if feat.type == 'CDS':
+            if feat.type == "CDS":
                 newStart = (3 - abs(start - feat.location.start)) % 3
             else:
                 newStart = 0
             newEnd = feat.location.end - start
-            spanFeat.location = FeatureLocation(newStart,
-                                                newEnd,
-                                                strand=feat.location.strand)
+            spanFeat.location = FeatureLocation(
+                newStart, newEnd, strand=feat.location.strand
+            )
             for key in feat.qualifiers:
-                if key in ['gene_synonym', 'locus_tag', 'product',
-                           'protein_id', 'db_xref', 'mol_type']:
-                    spanFeat.qualifiers[key] = [f'{keyStr} (right part)'
-                                                for keyStr
-                                                in feat.qualifiers[key]]
-                elif key == 'translation':
+                if key in [
+                    "gene_synonym",
+                    "locus_tag",
+                    "product",
+                    "protein_id",
+                    "db_xref",
+                    "mol_type",
+                ]:
                     spanFeat.qualifiers[key] = [
-                        keyStr for keyStr in feat.qualifiers[key]]
+                        f"{keyStr} (right part)"
+                        for keyStr in feat.qualifiers[key]
+                    ]
+                elif key == "translation":
+                    spanFeat.qualifiers[key] = [
+                        keyStr for keyStr in feat.qualifiers[key]
+                    ]
                     if feat.location.strand == 1:
-                        cutPoint = len(
-                            spanFeat.qualifiers[key][0]) - \
-                            ceil(len(spanFeat) / 3) + 1
-                        spanFeat.qualifiers[key][0] = \
-                            spanFeat.qualifiers[key][0][cutPoint:]
+                        cutPoint = (
+                            len(spanFeat.qualifiers[key][0])
+                            - ceil(len(spanFeat) / 3)
+                            + 1
+                        )
+                        spanFeat.qualifiers[key][0] = spanFeat.qualifiers[key][
+                            0
+                        ][cutPoint:]
                     else:
                         cutPoint = len(spanFeat) // 3
-                        spanFeat.qualifiers[key][0] = \
-                            spanFeat.qualifiers[key][0][:cutPoint]
+                        spanFeat.qualifiers[key][0] = spanFeat.qualifiers[key][
+                            0
+                        ][:cutPoint]
                 else:
                     spanFeat.qualifiers[key] = feat.qualifiers[key]
             spanFeats.append(spanFeat)
 
         elif spanEnd:
             # End position inside feature, feature ends in this range
-            if feat.type == 'CDS':
+            if feat.type == "CDS":
                 newEnd = end - start - abs(end - feat.location.start) % 3
             else:
                 newEnd = end - start
             newStart = feat.location.start - start
-            spanFeat.location = FeatureLocation(newStart,
-                                                newEnd,
-                                                strand=feat.location.strand)
+            spanFeat.location = FeatureLocation(
+                newStart, newEnd, strand=feat.location.strand
+            )
             for key in feat.qualifiers:
-                if key in ['gene_synonym', 'locus_tag', 'product',
-                           'protein_id', 'db_xref', 'mol_type']:
-                    spanFeat.qualifiers[key] = [f'{keyStr} (left part)'
-                                                for keyStr
-                                                in feat.qualifiers[key]]
-                elif key == 'translation':
+                if key in [
+                    "gene_synonym",
+                    "locus_tag",
+                    "product",
+                    "protein_id",
+                    "db_xref",
+                    "mol_type",
+                ]:
+                    spanFeat.qualifiers[key] = [
+                        f"{keyStr} (left part)"
+                        for keyStr in feat.qualifiers[key]
+                    ]
+                elif key == "translation":
                     spanFeat.qualifiers[key] = list(feat.qualifiers[key])
                     if feat.location.strand == 1:
                         cutPoint = len(spanFeat) // 3
-                        spanFeat.qualifiers[key][0] = \
-                            spanFeat.qualifiers[key][0][:cutPoint]
+                        spanFeat.qualifiers[key][0] = spanFeat.qualifiers[key][
+                            0
+                        ][:cutPoint]
                     else:
                         cutPoint = ceil((len(feat) - len(spanFeat)) / 3)
-                        spanFeat.qualifiers[key][0] = \
-                            spanFeat.qualifiers[key][0][cutPoint:]
+                        spanFeat.qualifiers[key][0] = spanFeat.qualifiers[key][
+                            0
+                        ][cutPoint:]
                 else:
                     spanFeat.qualifiers[key] = feat.qualifiers[key]
             spanFeats.append(spanFeat)
@@ -175,4 +240,6 @@ def getSpanFetures(genome, startOri, endOri, expand=20000):
             continue
 
     return spanFeats
+
+
 # getSpanFetures

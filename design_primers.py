@@ -10,6 +10,7 @@ from Bio import SeqIO
 from Bio.Seq import Seq
 
 from Bio.SeqFeature import FeatureLocation, SeqFeature
+from Bio.SeqRecord import SeqRecord
 from Bio.SeqUtils import MeltingTemp as mt
 
 from modules.find_gene import get_protein
@@ -18,6 +19,7 @@ from pyBioinfo_modules.wrappers.hmmer import hmmsearch, read_domtbl
 from modules.primer_utils import find_local_best_primer_bind
 from pyBioinfo_modules.bio_sequences.bio_features import (
     slice_seq_record_preserve_truncated,
+    add_oligo_to_seq_record_as_feature,
 )
 from modules.gibson import (
     clean_overhangs_for_gibson,
@@ -59,7 +61,6 @@ def argparser():
     )
 
     return parser
-
 
 
 def primer_name(prefix, suffix, n):
@@ -167,10 +168,14 @@ def main():
         args.output / f"{args.name}_dom_near_term.tsv", sep="\t", index=True
     )
 
+    # Replace hardcoded linker sequences with sequences from the config
     cterm_fwd_linker = Seq(configs["cterm_fwd_linker"])
     cterm_rev_flag_linker = Seq(configs["cterm_rev_flag_linker"])
+    cterm_flag_fwd_annealing = Seq(configs["cterm_flag_fwd_annealing"])
     nterm_promoter_fwd_linker = Seq(configs["nterm_promoter_fwd_linker"])
-    nterm_promoter_rev_flag_linker = Seq(configs["nterm_promoter_rev_flag_linker"])
+    nterm_promoter_rev_flag_linker = Seq(
+        configs["nterm_promoter_rev_flag_linker"]
+    )
     nterm_coding_fwd_flag_linker = Seq(configs["nterm_coding_fwd_flag_linker"])
     nterm_coding_rev_linker = Seq(configs["nterm_coding_rev_linker"])
 
@@ -230,12 +235,37 @@ def main():
             pr_name, primer_n = primer_name(
                 configs["oligo_prefix"], f"{gene}_Ct_rev", primer_n
             )
+            p_flag_f_name, primer_n = primer_name(
+                configs["oligo_prefix"], f"{gene}_Ct_flag_fwd", primer_n
+            )
             pf = cterm_fwd_linker + p_fwd_anneal
             pr = cterm_rev_flag_linker + p_rev_anneal
+            pr_rc = pr.reverse_complement()
+            p_flag_f = pr_rc + cterm_flag_fwd_annealing
             ct_product = (
                 cterm_fwd_linker
                 + ct_product
                 + cterm_rev_flag_linker.reverse_complement()
+            )
+            flag_product = SeqRecord(
+                (pr_rc + configs["full_seqs_fixed"]["cterm_flag_full_seq"])
+            )
+            flag_product.id = f"{gene}_Ct_flag"
+            flag_product = add_oligo_to_seq_record_as_feature(
+                flag_product,
+                SeqRecord(
+                    Seq(configs["full_seqs_fixed"]["PCB-323"]),
+                    id="PCB-323",
+                    description="PCB-323",
+                ),
+            )
+            flag_product = add_oligo_to_seq_record_as_feature(
+                flag_product,
+                SeqRecord(
+                    Seq(configs["full_seqs_fixed"]["oCOMM117"]),
+                    id="oCOMM117",
+                    description="oCOMM117",
+                ),
             )
             primers[pf_name] = {
                 "anneal": p_fwd_anneal,
@@ -250,6 +280,13 @@ def main():
                 "with_linker": pr,
                 "full_len": len(pr),
                 "anneal_len": len(p_rev_anneal),
+            }
+            primers[p_flag_f_name] = {
+                "anneal": configs["cterm_flag_fwd_annealing"],
+                "linker": pr_rc,
+                "with_linker": p_flag_f,
+                "full_len": len(p_flag_f),
+                "anneal_len": len(configs["cterm_flag_fwd_annealing"]),
             }
             primer_pairs[f"{construct_id_prefix}_{gene}_Ct"] = {
                 "fwd": pf_name,
@@ -272,6 +309,24 @@ def main():
                 "rev_anneal": p_rev_anneal,
                 "rev_anneal_len": len(p_rev_anneal),
                 "product": ct_product,
+                "note": "",
+            }
+            primer_pairs[f"{construct_id_prefix}_{gene}_Ct_flag"] = {
+                "fwd": p_flag_f_name,
+                "fwd_TM": "61.4",
+                "rev": "oCOMM117",
+                "rev_TM": "64.4",
+                "product_size": (89 + len(pr_rc)),
+                "fwd_seq": p_flag_f,
+                "fwd_full_len": len(p_flag_f),
+                "rev_seq": configs["full_seqs_fixed"]["oCOMM117"],
+                "rev_full_len": len(configs["full_seqs_fixed"]["oCOMM117"]),
+                "fwd_anneal": configs["cterm_flag_fwd_annealing"],
+                "fwd_anneal_len": len(configs["cterm_flag_fwd_annealing"]),
+                "rev_anneal": "GTCGTCGTCCTTGTAGTCGATGTC",
+                "rev_anneal_len": 24,
+                "product": flag_product,
+                "note": f"PCR with oligo PCB-323: {configs['full_seqs_fixed']["PCB-323"]}",
             }
         elif tag_term == "N":  # HTH in C-terminal, tag N-terminal
             if location.strand == 1:
@@ -489,13 +544,16 @@ def main():
             if gene in pp:
                 frags[pp] = primer_pairs[pp]["product"]
         if tag_term == "C":
-            assert (
-                len(frags) == 1
-            ), "Multiple fragments found for C trem tagging"
-            construct_name = [p for p in frags][0]
+            assert len(frags) == 2, "Needs 2 fragments C trem tagging"
+            construct_name = [p for p in frags if p.endswith("Ct")][0]
+            flag_frag_name = construct_name.replace("Ct", "Ct_flag")
+            assert flag_frag_name in frags, "Flag fragment not found"
             frag = frags[construct_name]
+            flag_frag = frags[flag_frag_name]
             construct = make_circular_gibson(
-                conjugate_seq_records_gibson(frag, ct_backbone)
+                conjugate_seq_records_gibson(
+                    conjugate_seq_records_gibson(frag, flag_frag), ct_backbone
+                )
             )
             construct.id = construct_name
         elif tag_term == "N":
