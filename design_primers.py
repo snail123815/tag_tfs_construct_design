@@ -291,6 +291,7 @@ def main():
             primer_pairs[f"{construct_id_prefix}_{gene}_Ct"] = {
                 "fwd": pf_name,
                 "fwd_TM": f"{mt.Tm_NN(p_fwd_anneal):.2f}",
+                "internal": "",
                 "rev": pr_name,
                 "rev_TM": f"{mt.Tm_NN(p_rev_anneal):.2f}",
                 "product_size": (
@@ -314,6 +315,7 @@ def main():
             primer_pairs[f"{construct_id_prefix}_{gene}_Ct_flag"] = {
                 "fwd": p_flag_f_name,
                 "fwd_TM": "61.4",
+                "internal": "PCB-323",
                 "rev": "oCOMM117",
                 "rev_TM": "64.4",
                 "product_size": (89 + len(pr_rc)),
@@ -441,6 +443,7 @@ def main():
             primer_pairs[f"{construct_id_prefix}_{gene}_Nt_promoter"] = {
                 "fwd": ppf_name,
                 "fwd_TM": f"{mt.Tm_NN(p_promoter_fwd_anneal):.2f}",
+                "internal": "",
                 "rev": ppr_name,
                 "rev_TM": f"{mt.Tm_NN(p_promoter_rev_anneal):.2f}",
                 "product_size": (
@@ -484,6 +487,7 @@ def main():
             primer_pairs[f"{construct_id_prefix}_{gene}_Nt_coding"] = {
                 "fwd": pcf_name,
                 "fwd_TM": f"{mt.Tm_NN(p_coding_fwd_anneal):.2f}",
+                "internal": "",
                 "rev": pcr_name,
                 "rev_TM": f"{mt.Tm_NN(p_coding_rev_anneal):.2f}",
                 "product_size": (
