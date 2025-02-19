@@ -255,13 +255,13 @@ def main():
                 flag_product,
                 Seq(configs["full_seqs_fixed"]["PCB-323"]),
                 feature_type="primer_bind",
-                qualifiers={"label":["PCB-323"]},
+                qualifiers={"label": ["PCB-323"]},
             )
             flag_product = add_seq_to_SeqRecord_as_feature(
                 flag_product,
                 Seq(configs["full_seqs_fixed"]["oCOMM117"]),
                 feature_type="primer_bind",
-                qualifiers={"label":["oCOMM117"]},
+                qualifiers={"label": ["oCOMM117"]},
             )
             primers[pf_name] = {
                 "anneal": p_fwd_anneal,

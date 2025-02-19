@@ -1,10 +1,8 @@
 import argparse
-import shutil
 from pathlib import Path
 import logging
 from io import StringIO
 from itertools import chain
-from tempfile import NamedTemporaryFile
 
 logging.basicConfig(
     level=logging.INFO,
